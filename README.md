@@ -133,5 +133,9 @@ docker compose down -v
 - **Web UI cannot reach API**
   - Confirm API is healthy at `http://localhost:5000/health`.
   - Confirm `docker compose` is running and ports `5000`/`5173` are free.
+- **API fails with `relation "SyncProfiles" does not exist`**
+  - Your local Postgres volume likely has stale/partial schema metadata from an earlier run.
+  - Reset local DB volume and re-run migrations: `docker compose down -v && docker compose up --build`.
+
 - **Need a clean database**
   - Run `docker compose down -v` and start again.
