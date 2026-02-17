@@ -19,7 +19,8 @@ public sealed class TokenRefreshService(
     public async Task<AuthCallbackResult> RefreshIfExpiringAsync(string userId, OAuthProvider provider, CancellationToken cancellationToken = default)
     {
         var account = await dbContext.ConnectedAccounts
-            .SingleOrDefaultAsync(x => x.UserId == userId && x.Provider == provider.ToString(), cancellationToken);
+            .Include(x => x.UserAccount)
+            .SingleOrDefaultAsync(x => x.UserAccount.ExternalUserId == userId && x.Provider == provider.ToString(), cancellationToken);
 
         if (account is null)
         {
@@ -32,7 +33,7 @@ public sealed class TokenRefreshService(
             return new AuthCallbackResult(true, expiresAt, account.LastRefreshResult);
         }
 
-        if (string.IsNullOrWhiteSpace(account.EncryptedRefreshToken))
+        if (string.IsNullOrWhiteSpace(account.RefreshTokenRef))
         {
             account.LastRefreshResult = "refresh_unavailable";
             account.LastRefreshedAt = DateTimeOffset.UtcNow;
@@ -40,13 +41,13 @@ public sealed class TokenRefreshService(
             return new AuthCallbackResult(true, account.ExpiresAt, account.LastRefreshResult);
         }
 
-        var refreshToken = _protector.Unprotect(account.EncryptedRefreshToken);
+        var refreshToken = _protector.Unprotect(account.RefreshTokenRef);
         var refreshed = await RefreshTokenAsync(provider, refreshToken, cancellationToken);
 
-        account.EncryptedAccessToken = _protector.Protect(refreshed.AccessToken);
+        account.AccessTokenRef = _protector.Protect(refreshed.AccessToken);
         if (!string.IsNullOrWhiteSpace(refreshed.RefreshToken))
         {
-            account.EncryptedRefreshToken = _protector.Protect(refreshed.RefreshToken);
+            account.RefreshTokenRef = _protector.Protect(refreshed.RefreshToken);
         }
 
         account.ExpiresAt = refreshed.ExpiresIn is null ? account.ExpiresAt : DateTimeOffset.UtcNow.AddSeconds(refreshed.ExpiresIn.Value);

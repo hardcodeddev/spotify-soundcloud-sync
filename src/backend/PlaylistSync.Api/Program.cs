@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using PlaylistSync.Infrastructure;
 using PlaylistSync.Infrastructure.Persistence;
@@ -25,7 +26,7 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<PlaylistSyncDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    await db.Database.MigrateAsync();
 }
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
