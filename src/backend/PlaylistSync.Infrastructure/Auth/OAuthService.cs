@@ -68,21 +68,24 @@ public sealed class OAuthService(
 
         var token = await ExchangeCodeAsync(provider, code, storedState.CodeVerifier, cancellationToken);
 
+        var userAccount = await GetOrCreateUserAccountAsync(userId, cancellationToken);
+
         var account = await dbContext.ConnectedAccounts
-            .SingleOrDefaultAsync(x => x.UserId == userId && x.Provider == provider.ToString(), cancellationToken);
+            .SingleOrDefaultAsync(x => x.UserAccountId == userAccount.Id && x.Provider == provider.ToString(), cancellationToken);
 
         if (account is null)
         {
             account = new ConnectedAccount
             {
-                UserId = userId,
-                Provider = provider.ToString()
+                UserAccountId = userAccount.Id,
+                Provider = provider.ToString(),
+                ProviderUserId = userId
             };
             dbContext.ConnectedAccounts.Add(account);
         }
 
-        account.EncryptedAccessToken = _protector.Protect(token.AccessToken);
-        account.EncryptedRefreshToken = token.RefreshToken is null ? null : _protector.Protect(token.RefreshToken);
+        account.AccessTokenRef = _protector.Protect(token.AccessToken);
+        account.RefreshTokenRef = token.RefreshToken is null ? null : _protector.Protect(token.RefreshToken);
         account.ExpiresAt = token.ExpiresIn is null ? null : DateTimeOffset.UtcNow.AddSeconds(token.ExpiresIn.Value);
         account.LastRefreshResult = "connected";
         account.LastRefreshedAt = DateTimeOffset.UtcNow;
@@ -90,6 +93,28 @@ public sealed class OAuthService(
         await dbContext.SaveChangesAsync(cancellationToken);
 
         return await tokenRefreshService.RefreshIfExpiringAsync(userId, provider, cancellationToken);
+    }
+
+
+    private async Task<UserAccount> GetOrCreateUserAccountAsync(string externalUserId, CancellationToken cancellationToken)
+    {
+        var userAccount = await dbContext.UserAccounts
+            .SingleOrDefaultAsync(x => x.ExternalUserId == externalUserId, cancellationToken);
+
+        if (userAccount is not null)
+        {
+            return userAccount;
+        }
+
+        userAccount = new UserAccount
+        {
+            ExternalUserId = externalUserId
+        };
+
+        dbContext.UserAccounts.Add(userAccount);
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        return userAccount;
     }
 
     private async Task<OAuthTokenResponse> ExchangeCodeAsync(OAuthProvider provider, string code, string verifier, CancellationToken cancellationToken)
