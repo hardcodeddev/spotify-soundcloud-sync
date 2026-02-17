@@ -45,6 +45,9 @@ public sealed class SyncProfile
     public UserAccount UserAccount { get; set; } = null!;
     public SyncDirection Direction { get; set; } = SyncDirection.OneWay;
     public LikesSyncBehavior LikesBehavior { get; set; } = LikesSyncBehavior.Disabled;
+    public string? ScheduleCron { get; set; }
+    public string ScheduleTimeZone { get; set; } = "UTC";
+    public bool ScheduleEnabled { get; set; }
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public ICollection<PlaylistMapping> PlaylistMappings { get; set; } = new List<PlaylistMapping>();
 }

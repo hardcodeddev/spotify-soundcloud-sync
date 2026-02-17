@@ -159,6 +159,18 @@ namespace PlaylistSync.Infrastructure.Persistence.Migrations
                     b.Property<int>("LikesBehavior")
                         .HasColumnType("integer");
 
+                    b.Property<string>("ScheduleCron")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<bool>("ScheduleEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ScheduleTimeZone")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
