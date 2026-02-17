@@ -92,10 +92,10 @@ public class SyncController(
 
         if (!cronScheduleValidator.TryValidate(request.CronExpression, out var normalizedCronExpression, out var cronError))
         {
-            return ValidationProblem(new Dictionary<string, string[]>
+            return BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]>
             {
                 [nameof(request.CronExpression)] = [cronError ?? "Invalid cron expression."]
-            });
+            }));
         }
 
         var timeZoneId = string.IsNullOrWhiteSpace(request.TimeZoneId) ? "UTC" : request.TimeZoneId.Trim();
@@ -105,10 +105,10 @@ public class SyncController(
         }
         catch (TimeZoneNotFoundException)
         {
-            return ValidationProblem(new Dictionary<string, string[]>
+            return BadRequest(new ValidationProblemDetails(new Dictionary<string, string[]>
             {
                 [nameof(request.TimeZoneId)] = ["Unknown timezone."]
-            });
+            }));
         }
 
         profile.ScheduleEnabled = true;
@@ -256,7 +256,7 @@ public class SyncController(
             HttpOnly = true,
             IsEssential = true,
             SameSite = SameSiteMode.Lax,
-            Secure = true,
+            Secure = Request.IsHttps,
             MaxAge = TimeSpan.FromDays(30)
         });
     }
