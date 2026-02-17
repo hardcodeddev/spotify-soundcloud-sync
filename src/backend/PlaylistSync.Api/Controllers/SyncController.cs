@@ -156,6 +156,35 @@ public class SyncController(
         return Accepted(ToRunResponse(job, run));
     }
 
+
+    [HttpGet("runs/latest")]
+    public async Task<IActionResult> GetLatestRun(CancellationToken cancellationToken)
+    {
+        var user = await GetOrCreateUserAsync(cancellationToken);
+
+        var latestRun = await dbContext.SyncRuns
+            .AsNoTracking()
+            .Include(x => x.SyncJob)
+            .Where(x => x.SyncJob.UserAccountId == user.Id)
+            .OrderByDescending(x => x.StartedAt)
+            .Select(x => new
+            {
+                x.Id,
+                x.SyncJobId,
+                status = x.Status.ToString(),
+                x.StartedAt,
+                x.EndedAt,
+                x.ImportedCount,
+                x.ExportedCount,
+                x.SkippedCount,
+                x.Error,
+                idempotencyKey = x.SyncJob.RequestedIdempotencyKey
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return latestRun is null ? NotFound() : Ok(latestRun);
+    }
+
     [HttpGet("runs")]
     public async Task<IActionResult> GetRuns(CancellationToken cancellationToken)
     {
@@ -187,7 +216,7 @@ public class SyncController(
 
     private async Task<UserAccount> GetOrCreateUserAsync(CancellationToken cancellationToken)
     {
-        var userId = Request.Headers["X-User-Id"].FirstOrDefault() ?? "demo-user";
+        var userId = ResolveUserId();
         var user = await dbContext.UserAccounts.SingleOrDefaultAsync(x => x.ExternalUserId == userId, cancellationToken);
         if (user is not null)
         {
@@ -198,6 +227,38 @@ public class SyncController(
         dbContext.UserAccounts.Add(user);
         await dbContext.SaveChangesAsync(cancellationToken);
         return user;
+    }
+
+    private string ResolveUserId()
+    {
+        var userIdFromHeader = Request.Headers["X-User-Id"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(userIdFromHeader))
+        {
+            WriteUserCookie(userIdFromHeader);
+            return userIdFromHeader;
+        }
+
+        var userIdFromCookie = Request.Cookies["playlist_sync_user"];
+        if (!string.IsNullOrWhiteSpace(userIdFromCookie))
+        {
+            return userIdFromCookie;
+        }
+
+        var generatedUserId = $"user-{Guid.NewGuid():N}";
+        WriteUserCookie(generatedUserId);
+        return generatedUserId;
+    }
+
+    private void WriteUserCookie(string userId)
+    {
+        Response.Cookies.Append("playlist_sync_user", userId, new CookieOptions
+        {
+            HttpOnly = true,
+            IsEssential = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = true,
+            MaxAge = TimeSpan.FromDays(30)
+        });
     }
 
     private static object ToProfileResponse(SyncProfile profile) => new
