@@ -1,5 +1,5 @@
 using Microsoft.EntityFrameworkCore;
-using Npgsql;
+using System.Data;
 using PlaylistSync.Infrastructure.Persistence;
 using Quartz;
 
@@ -12,7 +12,10 @@ public interface ISyncSchedulerService
     Task RegisterAllSchedulesAsync(CancellationToken cancellationToken = default);
 }
 
-public sealed class SyncSchedulerService(ISchedulerFactory schedulerFactory, PlaylistSyncDbContext dbContext) : ISyncSchedulerService
+public sealed class SyncSchedulerService(
+    ISchedulerFactory schedulerFactory,
+    PlaylistSyncDbContext dbContext,
+    ILogger<SyncSchedulerService> logger) : ISyncSchedulerService
 {
     public async Task RegisterOrUpdateRecurringJobAsync(Guid userAccountId, string cronExpression, string timeZoneId, CancellationToken cancellationToken = default)
     {
@@ -51,6 +54,12 @@ public sealed class SyncSchedulerService(ISchedulerFactory schedulerFactory, Pla
 
     public async Task RegisterAllSchedulesAsync(CancellationToken cancellationToken = default)
     {
+        if (!await SyncProfilesTableExistsAsync(cancellationToken))
+        {
+            logger.LogWarning("Skipping schedule registration because table 'SyncProfiles' does not exist yet. If this is stale local state, run `docker compose down -v` and restart.");
+            return;
+        }
+
         var profiles = await dbContext.SyncProfiles
             .AsNoTracking()
             .Where(x => x.ScheduleEnabled && x.ScheduleCron != null)
@@ -61,6 +70,21 @@ public sealed class SyncSchedulerService(ISchedulerFactory schedulerFactory, Pla
         {
             await RegisterOrUpdateRecurringJobAsync(profile.UserAccountId, profile.ScheduleCron!, profile.ScheduleTimeZone, cancellationToken);
         }
+    }
+
+    private async Task<bool> SyncProfilesTableExistsAsync(CancellationToken cancellationToken)
+    {
+        var connection = dbContext.Database.GetDbConnection();
+        if (connection.State != ConnectionState.Open)
+        {
+            await connection.OpenAsync(cancellationToken);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT to_regclass('public.\"SyncProfiles\"') IS NOT NULL;";
+
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is bool exists && exists;
     }
 
     private static JobKey JobKeyFor(Guid userAccountId) => new($"sync:user:{userAccountId:N}");
