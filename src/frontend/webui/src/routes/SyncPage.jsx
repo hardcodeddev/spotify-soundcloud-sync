@@ -1,14 +1,12 @@
-import { runSync } from '../api/client'
+import RunNowPanel from '../components/RunNowPanel'
+import SyncConfigPage from './SyncConfigPage'
 
 function SyncPage() {
-  const triggerSync = async () => {
-    await runSync()
-  }
-
   return (
     <section>
       <h1>Sync</h1>
-      <button onClick={triggerSync}>Run sync now</button>
+      <SyncConfigPage />
+      <RunNowPanel />
     </section>
   )
 }
