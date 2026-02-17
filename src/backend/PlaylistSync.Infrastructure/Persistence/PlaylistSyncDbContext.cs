@@ -43,6 +43,8 @@ public sealed class PlaylistSyncDbContext(DbContextOptions<PlaylistSyncDbContext
             entity.ToTable("SyncProfiles");
             entity.HasKey(x => x.Id);
             entity.HasIndex(x => x.UserAccountId).IsUnique();
+            entity.Property(x => x.ScheduleCron).HasMaxLength(100);
+            entity.Property(x => x.ScheduleTimeZone).HasMaxLength(100).IsRequired();
             entity.HasOne(x => x.UserAccount)
                 .WithOne(x => x.SyncProfile)
                 .HasForeignKey<SyncProfile>(x => x.UserAccountId)

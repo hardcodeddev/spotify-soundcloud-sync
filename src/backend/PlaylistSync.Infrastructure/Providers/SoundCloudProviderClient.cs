@@ -176,16 +176,17 @@ public sealed class SoundCloudProviderClient(
             client.BaseAddress = new Uri("https://api-v2.soundcloud.com/");
         }
 
-        using var request = new HttpRequestMessage(method, relativePath);
-        request.Headers.Authorization = new AuthenticationHeaderValue("OAuth", accessToken);
-
-        if (jsonBody is not null)
+        return await ProviderRequestPolicy.SendWithRetryAsync(async ct =>
         {
-            request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
-        }
+            using var request = new HttpRequestMessage(method, relativePath);
+            request.Headers.Authorization = new AuthenticationHeaderValue("OAuth", accessToken);
 
-        var response = await client.SendAsync(request, cancellationToken);
-        response.EnsureSuccessStatusCode();
-        return response;
+            if (jsonBody is not null)
+            {
+                request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            }
+
+            return await client.SendAsync(request, ct);
+        }, cancellationToken);
     }
 }

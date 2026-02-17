@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using PlaylistSync.Api.Services;
 using PlaylistSync.Core;
 using PlaylistSync.Infrastructure.Persistence;
 
@@ -7,7 +8,11 @@ namespace PlaylistSync.Api.Controllers;
 
 [ApiController]
 [Route("sync")]
-public class SyncController(PlaylistSyncDbContext dbContext, ISyncService syncService) : ControllerBase
+public class SyncController(
+    PlaylistSyncDbContext dbContext,
+    ISyncExecutionService syncExecutionService,
+    ISyncSchedulerService syncSchedulerService,
+    ICronScheduleValidator cronScheduleValidator) : ControllerBase
 {
     [HttpGet("profile")]
     public async Task<IActionResult> GetProfile(CancellationToken cancellationToken)
@@ -63,6 +68,66 @@ public class SyncController(PlaylistSyncDbContext dbContext, ISyncService syncSe
         return Ok(ToProfileResponse(profile));
     }
 
+    [HttpPut("schedule")]
+    public async Task<IActionResult> PutSchedule([FromBody] UpdateSyncScheduleRequest request, CancellationToken cancellationToken)
+    {
+        var user = await GetOrCreateUserAsync(cancellationToken);
+        var profile = await dbContext.SyncProfiles.SingleOrDefaultAsync(x => x.UserAccountId == user.Id, cancellationToken);
+        if (profile is null)
+        {
+            profile = new SyncProfile { UserAccountId = user.Id };
+            dbContext.SyncProfiles.Add(profile);
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CronExpression))
+        {
+            profile.ScheduleEnabled = false;
+            profile.ScheduleCron = null;
+            profile.ScheduleTimeZone = "UTC";
+            profile.UpdatedAt = DateTimeOffset.UtcNow;
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await syncSchedulerService.RemoveRecurringJobAsync(user.Id, cancellationToken);
+            return Ok(new { enabled = false });
+        }
+
+        if (!cronScheduleValidator.TryValidate(request.CronExpression, out var normalizedCronExpression, out var cronError))
+        {
+            return ValidationProblem(new Dictionary<string, string[]>
+            {
+                [nameof(request.CronExpression)] = [cronError ?? "Invalid cron expression."]
+            });
+        }
+
+        var timeZoneId = string.IsNullOrWhiteSpace(request.TimeZoneId) ? "UTC" : request.TimeZoneId.Trim();
+        try
+        {
+            _ = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return ValidationProblem(new Dictionary<string, string[]>
+            {
+                [nameof(request.TimeZoneId)] = ["Unknown timezone."]
+            });
+        }
+
+        profile.ScheduleEnabled = true;
+        profile.ScheduleCron = normalizedCronExpression;
+        profile.ScheduleTimeZone = timeZoneId;
+        profile.UpdatedAt = DateTimeOffset.UtcNow;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await syncSchedulerService.RegisterOrUpdateRecurringJobAsync(user.Id, normalizedCronExpression, timeZoneId, cancellationToken);
+
+        return Ok(new
+        {
+            enabled = profile.ScheduleEnabled,
+            cronExpression = request.CronExpression,
+            normalizedCronExpression = profile.ScheduleCron,
+            timeZoneId = profile.ScheduleTimeZone
+        });
+    }
+
 
     [HttpPost("run")]
     public Task<IActionResult> Run(CancellationToken cancellationToken) => RunNow(cancellationToken);
@@ -87,45 +152,7 @@ public class SyncController(PlaylistSyncDbContext dbContext, ISyncService syncSe
             return Ok(ToRunResponse(existingJob, existingRun));
         }
 
-        var now = DateTimeOffset.UtcNow;
-        var job = new SyncJob
-        {
-            UserAccountId = user.Id,
-            RequestedIdempotencyKey = idempotencyKey,
-            Status = SyncRunStatus.Running,
-            StartedAt = now
-        };
-
-        var run = new SyncRun
-        {
-            SyncJob = job,
-            Status = SyncRunStatus.Running,
-            StartedAt = now
-        };
-
-        dbContext.SyncJobs.Add(job);
-        dbContext.SyncRuns.Add(run);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        try
-        {
-            await syncService.RunPlaylistSyncAsync(cancellationToken);
-            run.Status = SyncRunStatus.Completed;
-            run.EndedAt = DateTimeOffset.UtcNow;
-            job.Status = SyncRunStatus.Completed;
-            job.EndedAt = run.EndedAt;
-        }
-        catch (Exception ex)
-        {
-            run.Status = SyncRunStatus.Failed;
-            run.EndedAt = DateTimeOffset.UtcNow;
-            run.Error = ex.Message;
-            job.Status = SyncRunStatus.Failed;
-            job.EndedAt = run.EndedAt;
-            job.Error = ex.Message;
-        }
-
-        await dbContext.SaveChangesAsync(cancellationToken);
+        var (job, run) = await syncExecutionService.ExecuteForUserAsync(user, idempotencyKey, cancellationToken);
         return Accepted(ToRunResponse(job, run));
     }
 
@@ -179,6 +206,12 @@ public class SyncController(PlaylistSyncDbContext dbContext, ISyncService syncSe
         direction = profile.Direction.ToString(),
         likesBehavior = profile.LikesBehavior.ToString(),
         profile.UpdatedAt,
+        schedule = new
+        {
+            enabled = profile.ScheduleEnabled,
+            cronExpression = profile.ScheduleCron,
+            timeZoneId = profile.ScheduleTimeZone
+        },
         playlistMappings = profile.PlaylistMappings.Select(x => new
         {
             x.SourceProvider,
@@ -213,4 +246,6 @@ public class SyncController(PlaylistSyncDbContext dbContext, ISyncService syncSe
         string SourcePlaylistId,
         string TargetProvider,
         string TargetPlaylistId);
+
+    public sealed record UpdateSyncScheduleRequest(string? CronExpression, string? TimeZoneId);
 }
