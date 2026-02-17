@@ -12,6 +12,10 @@ Make sure you have:
 - Git
 - A Spotify developer app
 - A SoundCloud developer app
+- An HTTPS tunnel tool (for OAuth callbacks), for example:
+  - [ngrok](https://ngrok.com/)
+  - [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+
 
 ## 2) Clone and open the project
 
@@ -20,6 +24,56 @@ git clone <your-repo-url>
 cd spotify-soundcloud-sync
 ```
 
+## 3) Start the stack
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- API (local): `http://localhost:5000`
+- Web UI: `http://localhost:5173`
+- Postgres: `localhost:5432`
+
+The API applies database migrations automatically on startup.
+
+## 4) Create a secure callback URL (required)
+
+Spotify and SoundCloud require **HTTPS callback URLs**. Local `http://localhost:5000/...` callback URLs will not work for OAuth app registration.
+
+Expose the local API through an HTTPS tunnel that forwards to port `5000`, for example:
+
+```bash
+# Example with ngrok
+ngrok http 5000
+```
+
+Copy the generated HTTPS base URL (example: `https://abc123.ngrok-free.app`).
+
+## 5) Configure OAuth credentials
+
+The API reads OAuth settings from:
+
+- `src/backend/PlaylistSync.Api/appsettings.Development.json`
+
+Edit that file and replace placeholder values:
+
+- `OAuth.Spotify.ClientId`
+- `OAuth.Spotify.ClientSecret`
+- `OAuth.SoundCloud.ClientId`
+- `OAuth.SoundCloud.ClientSecret`
+
+Set callback URLs to your HTTPS tunnel domain:
+
+- Spotify: `https://<your-tunnel-domain>/auth/spotify/callback`
+- SoundCloud: `https://<your-tunnel-domain>/auth/soundcloud/callback`
+
+> Register the exact same HTTPS callback URLs in Spotify and SoundCloud developer portals.
+
+## 6) Verify services are running
 ## 3) Configure OAuth credentials
 
 The API reads OAuth settings from `src/backend/PlaylistSync.Api/appsettings.Development.json`.
@@ -106,6 +160,11 @@ docker compose down -v
 
 - **OAuth fails or popup closes immediately**
   - Re-check client IDs/secrets in `appsettings.Development.json`.
+  - Confirm callback URLs in provider dashboards exactly match your HTTPS tunnel callback URLs.
+  - Ensure your tunnel is still running and points to local port `5000`.
+- **Web UI cannot reach API**
+  - Confirm API is healthy at `http://localhost:5000/health`.
+  - Confirm `docker compose` is running and ports `5000`/`5173` are free.
   - Confirm callback URLs in provider dashboards exactly match the local callback URLs.
 - **Web UI cannot reach API**
   - Confirm API is healthy at `http://localhost:5000/health`.
