@@ -16,6 +16,7 @@ Make sure you have:
   - [ngrok](https://ngrok.com/)
   - [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
 
+
 ## 2) Clone and open the project
 
 ```bash
@@ -73,6 +74,41 @@ Set callback URLs to your HTTPS tunnel domain:
 > Register the exact same HTTPS callback URLs in Spotify and SoundCloud developer portals.
 
 ## 6) Verify services are running
+## 3) Configure OAuth credentials
+
+The API reads OAuth settings from `src/backend/PlaylistSync.Api/appsettings.Development.json`.
+
+Edit that file and replace the placeholder values:
+
+- `OAuth.Spotify.ClientId`
+- `OAuth.Spotify.ClientSecret`
+- `OAuth.SoundCloud.ClientId`
+- `OAuth.SoundCloud.ClientSecret`
+
+Keep callback URLs set to:
+
+- Spotify: `http://localhost:5000/auth/spotify/callback`
+- SoundCloud: `http://localhost:5000/auth/soundcloud/callback`
+
+> You must also register those same callback URLs in the Spotify and SoundCloud developer portals.
+
+## 4) Start the stack
+
+From the repository root:
+
+```bash
+docker compose up --build
+```
+
+This starts:
+
+- API: `http://localhost:5000`
+- Web UI: `http://localhost:5173`
+- Postgres: `localhost:5432`
+
+The API applies database migrations automatically on startup.
+
+## 5) Verify services are running
 
 In a new terminal:
 
@@ -90,7 +126,7 @@ Then open the web app:
 
 - `http://localhost:5173`
 
-## 7) First-time usage flow in the UI
+## 6) First-time usage flow in the UI
 
 1. Go to **Connections**.
 2. Click **Connect Spotify** and complete auth.
@@ -129,5 +165,9 @@ docker compose down -v
 - **Web UI cannot reach API**
   - Confirm API is healthy at `http://localhost:5000/health`.
   - Confirm `docker compose` is running and ports `5000`/`5173` are free.
+  - Confirm callback URLs in provider dashboards exactly match the local callback URLs.
+- **Web UI cannot reach API**
+  - Confirm API is healthy at `http://localhost:5000/health`.
+  - Confirm `docker compose` is running and ports 5000/5173 are free.
 - **Need a clean database**
   - Run `docker compose down -v` and start again.

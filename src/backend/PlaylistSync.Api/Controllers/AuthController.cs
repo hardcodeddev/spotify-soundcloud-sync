@@ -104,7 +104,7 @@ public class AuthController(IOAuthService oauthService, PlaylistSyncDbContext db
             HttpOnly = true,
             IsEssential = true,
             SameSite = SameSiteMode.Lax,
-            Secure = true,
+            Secure = Request.IsHttps,
             MaxAge = TimeSpan.FromDays(30)
         });
     }
