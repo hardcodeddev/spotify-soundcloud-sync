@@ -115,11 +115,20 @@ public sealed class ScheduledSyncJob(IServiceScopeFactory serviceScopeFactory) :
     }
 }
 
-public sealed class SyncSchedulingStartupService(ISyncSchedulerService schedulerService) : IHostedService
+public sealed class SyncSchedulingStartupService(
+    ISyncSchedulerService schedulerService,
+    ILogger<SyncSchedulingStartupService> logger) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        await schedulerService.RegisterAllSchedulesAsync(cancellationToken);
+        try
+        {
+            await schedulerService.RegisterAllSchedulesAsync(cancellationToken);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UndefinedTable)
+        {
+            logger.LogWarning(ex, "Skipping schedule registration because required tables are missing. If this is a stale local database, reset it with `docker compose down -v` and restart.");
+        }
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
