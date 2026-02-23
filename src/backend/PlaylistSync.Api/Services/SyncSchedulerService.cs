@@ -1,3 +1,4 @@
+using Npgsql;
 using Microsoft.EntityFrameworkCore;
 using System.Data;
 using PlaylistSync.Infrastructure.Persistence;
