@@ -11,7 +11,6 @@ namespace PlaylistSync.Api.Controllers;
 public class SyncController(
     PlaylistSyncDbContext dbContext,
     ISyncExecutionService syncExecutionService,
-    ISyncSchedulerService syncSchedulerService,
     ICronScheduleValidator cronScheduleValidator) : ControllerBase
 {
     [HttpGet("profile")]
@@ -86,7 +85,6 @@ public class SyncController(
             profile.ScheduleTimeZone = "UTC";
             profile.UpdatedAt = DateTimeOffset.UtcNow;
             await dbContext.SaveChangesAsync(cancellationToken);
-            await syncSchedulerService.RemoveRecurringJobAsync(user.Id, cancellationToken);
             return Ok(new { enabled = false });
         }
 
@@ -117,7 +115,6 @@ public class SyncController(
         profile.UpdatedAt = DateTimeOffset.UtcNow;
 
         await dbContext.SaveChangesAsync(cancellationToken);
-        await syncSchedulerService.RegisterOrUpdateRecurringJobAsync(user.Id, normalizedCronExpression, timeZoneId, cancellationToken);
 
         return Ok(new
         {

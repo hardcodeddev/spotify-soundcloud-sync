@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using PlaylistSync.Api.Services;
 using PlaylistSync.Infrastructure;
 using PlaylistSync.Infrastructure.Persistence;
-using Quartz;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,15 +16,6 @@ builder.Services.AddPlaylistSyncInfrastructure(builder.Configuration);
 
 builder.Services.AddScoped<ICronScheduleValidator, CronScheduleValidator>();
 builder.Services.AddScoped<ISyncExecutionService, SyncExecutionService>();
-builder.Services.AddScoped<ISyncSchedulerService, SyncSchedulerService>();
-builder.Services.AddHostedService<SyncSchedulingStartupService>();
-
-builder.Services.AddQuartz(options =>
-{
-    options.UseSimpleTypeLoader();
-    options.UseInMemoryStore();
-});
-builder.Services.AddQuartzHostedService(options => options.WaitForJobsToComplete = true);
 
 var app = builder.Build();
 
