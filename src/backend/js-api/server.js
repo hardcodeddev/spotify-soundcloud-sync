@@ -6,6 +6,24 @@ const webOrigin = process.env.WEB_ORIGIN || 'http://localhost:5173'
 const users = new Map()
 const oauthStates = new Map()
 
+
+const requiredSpotifyScopes = [
+  'playlist-read-private',
+  'playlist-read-collaborative',
+  'playlist-modify-private',
+  'playlist-modify-public'
+]
+
+function parseGrantedScopes(scopeValue) {
+  if (!scopeValue) return new Set()
+  return new Set(String(scopeValue).split(/\s+/).map(value => value.trim()).filter(Boolean))
+}
+
+function getMissingSpotifyScopes(tokenPayload) {
+  const granted = parseGrantedScopes(tokenPayload?.scope || '')
+  return requiredSpotifyScopes.filter(scope => !granted.has(scope))
+}
+
 const oauthConfig = {
   spotify: {
     clientId: process.env.SPOTIFY_CLIENT_ID || '',
@@ -246,7 +264,7 @@ async function fetchPlaylistTracks(provider, accessToken, playlistId) {
     if (!response.ok) {
       const details = await response.text()
       if (response.status === 403) {
-        throw new Error(`Spotify playlist tracks request failed (403 Forbidden). Reconnect Spotify and approve all requested scopes (including playlist-read-collaborative). API response: ${details}`)
+        throw new Error(`Spotify playlist tracks request failed (403 Forbidden). The playlist may be inaccessible to this account/token. Reconnect Spotify (consent dialog is forced), then verify the playlist is owned/shared with this account. API response: ${details}`)
       }
       throw new Error(`Spotify playlist tracks request failed (${response.status}): ${details}`)
     }
@@ -474,9 +492,18 @@ async function syncMapping(user, mapping) {
     result.skippedCount = Math.max(sourceTracks.length - transferred, 0)
     return result
   } catch (error) {
+    const message = String(error?.message || error)
     logSyncError(`mapping ${sourceProvider}->${targetProvider}`, error)
+
+    if (sourceProvider === 'spotify' && message.includes('403 Forbidden')) {
+      result.status = 'Skipped'
+      result.skippedCount = 1
+      result.warning = message
+      return result
+    }
+
     result.status = 'Failed'
-    result.error = String(error?.message || error)
+    result.error = message
     return result
   }
 }
@@ -541,13 +568,18 @@ const server = http.createServer(async (req, res) => {
     oauthStates.set(state, { provider, userId, expiresAt: Date.now() + 10 * 60 * 1000 })
 
     const { authorizeUrl, scope } = providerOauthUrls(provider)
-    const redirectUrl = `${authorizeUrl}?${queryString({
+    const authParams = {
       client_id: cfg.clientId,
       response_type: 'code',
       redirect_uri: cfg.callbackUrl,
       scope,
       state
-    })}`
+    }
+    if (provider === 'spotify') {
+      authParams.show_dialog = 'true'
+    }
+
+    const redirectUrl = `${authorizeUrl}?${queryString(authParams)}`
 
     return send(res, 302, '', { 'Set-Cookie': cookieHeader(userId), Location: redirectUrl })
   }
@@ -574,10 +606,11 @@ const server = http.createServer(async (req, res) => {
       user.tokens[provider] = token
 
       const expiresAt = token.expires_in ? new Date(Date.now() + (Number(token.expires_in) * 1000)).toISOString() : null
+      const missingScopes = provider === 'spotify' ? getMissingSpotifyScopes(token) : []
       user.connections[provider] = {
         connected: true,
         expiresAt,
-        lastRefreshResult: 'connected'
+        lastRefreshResult: missingScopes.length ? `connected_with_missing_scopes:${missingScopes.join(',')}` : 'connected'
       }
 
       const providerTitle = provider === 'spotify' ? 'Spotify' : 'SoundCloud'

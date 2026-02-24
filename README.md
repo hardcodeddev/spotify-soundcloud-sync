@@ -30,7 +30,7 @@ docker compose up --build
 - OAuth endpoints support live Spotify/SoundCloud auth and sync:
   - `/auth/spotify/start`
   - `/auth/soundcloud/start`
-- If you previously connected Spotify before scope updates, reconnect Spotify so the token includes current scopes (notably `playlist-read-collaborative`) to avoid 403 errors reading some playlists.
+- Spotify connect now forces the consent dialog to refresh scopes/tokens. If 403 persists for a playlist, confirm that playlist is actually accessible to the connected Spotify account (some third-party playlists are not readable by all tokens).
 - For safe deployments (including a public GitHub Pages frontend), **never store OAuth client secrets in the browser**. Configure secrets only on the API server via environment variables:
   - `SPOTIFY_CLIENT_SECRET`
   - `SOUNDCLOUD_CLIENT_SECRET`
