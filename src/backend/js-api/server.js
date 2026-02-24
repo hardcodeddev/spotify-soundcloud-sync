@@ -92,7 +92,7 @@ function providerOauthUrls(provider) {
     return {
       authorizeUrl: 'https://accounts.spotify.com/authorize',
       tokenUrl: 'https://accounts.spotify.com/api/token',
-      scope: 'playlist-read-private playlist-modify-private playlist-modify-public'
+      scope: 'playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public'
     }
   }
 
@@ -245,6 +245,9 @@ async function fetchPlaylistTracks(provider, accessToken, playlistId) {
 
     if (!response.ok) {
       const details = await response.text()
+      if (response.status === 403) {
+        throw new Error(`Spotify playlist tracks request failed (403 Forbidden). Reconnect Spotify and approve all requested scopes (including playlist-read-collaborative). API response: ${details}`)
+      }
       throw new Error(`Spotify playlist tracks request failed (${response.status}): ${details}`)
     }
 
