@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getSyncProfile, saveSyncProfile, saveSyncSchedule } from '../api/client'
+import { getPlaylists, getSyncProfile, saveSyncProfile, saveSyncSchedule } from '../api/client'
 
 const EMPTY_MAPPING = { sourceProvider: 'spotify', sourcePlaylistId: '', targetProvider: 'soundcloud', targetPlaylistId: '' }
 
@@ -8,12 +8,23 @@ function SyncConfigPage() {
   const [likesBehavior, setLikesBehavior] = useState('Disabled')
   const [cronExpression, setCronExpression] = useState('')
   const [playlistMappings, setPlaylistMappings] = useState([EMPTY_MAPPING])
+  const [playlistOptions, setPlaylistOptions] = useState({ spotify: [], soundcloud: [] })
   const [message, setMessage] = useState(null)
+
+  const loadProviderPlaylists = async (provider) => {
+    const items = await getPlaylists(provider)
+    setPlaylistOptions((current) => ({ ...current, [provider]: items }))
+  }
 
   useEffect(() => {
     const load = async () => {
       try {
-        const profile = await getSyncProfile()
+        const [profile] = await Promise.all([
+          getSyncProfile(),
+          loadProviderPlaylists('spotify'),
+          loadProviderPlaylists('soundcloud')
+        ])
+
         setDirection(profile.direction)
         setLikesBehavior(profile.likesBehavior)
         setCronExpression(profile.schedule?.cronExpression ?? '')
@@ -27,7 +38,20 @@ function SyncConfigPage() {
   }, [])
 
   const updateMapping = (index, key, value) => {
-    setPlaylistMappings((current) => current.map((mapping, i) => i === index ? { ...mapping, [key]: value } : mapping))
+    setPlaylistMappings((current) => current.map((mapping, i) => {
+      if (i !== index) {
+        return mapping
+      }
+
+      const next = { ...mapping, [key]: value }
+      if (key === 'sourceProvider') {
+        next.sourcePlaylistId = ''
+      }
+      if (key === 'targetProvider') {
+        next.targetPlaylistId = ''
+      }
+      return next
+    }))
   }
 
   const save = async () => {
@@ -82,25 +106,33 @@ function SyncConfigPage() {
 
       <h3>Playlist mappings</h3>
       {playlistMappings.map((mapping, index) => (
-        <div className="mapping-row" key={`${index}-${mapping.sourcePlaylistId}-${mapping.targetPlaylistId}`}>
+        <div className="mapping-row" key={`${index}-${mapping.sourceProvider}-${mapping.targetProvider}`}>
           <select value={mapping.sourceProvider} onChange={(event) => updateMapping(index, 'sourceProvider', event.target.value)}>
             <option value="spotify">Spotify</option>
             <option value="soundcloud">SoundCloud</option>
           </select>
-          <input
+          <select
             value={mapping.sourcePlaylistId}
             onChange={(event) => updateMapping(index, 'sourcePlaylistId', event.target.value)}
-            placeholder="Source playlist ID"
-          />
+          >
+            <option value="">Select source playlist</option>
+            {(playlistOptions[mapping.sourceProvider] ?? []).map((playlist) => (
+              <option key={`${mapping.sourceProvider}-${playlist.id}`} value={playlist.name}>{playlist.name}</option>
+            ))}
+          </select>
           <select value={mapping.targetProvider} onChange={(event) => updateMapping(index, 'targetProvider', event.target.value)}>
             <option value="soundcloud">SoundCloud</option>
             <option value="spotify">Spotify</option>
           </select>
-          <input
+          <select
             value={mapping.targetPlaylistId}
             onChange={(event) => updateMapping(index, 'targetPlaylistId', event.target.value)}
-            placeholder="Target playlist ID"
-          />
+          >
+            <option value="">Select target playlist</option>
+            {(playlistOptions[mapping.targetProvider] ?? []).map((playlist) => (
+              <option key={`${mapping.targetProvider}-${playlist.id}`} value={playlist.name}>{playlist.name}</option>
+            ))}
+          </select>
         </div>
       ))}
 
