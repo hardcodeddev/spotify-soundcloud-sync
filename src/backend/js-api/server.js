@@ -205,6 +205,219 @@ async function exchangeCodeForToken(provider, code) {
   return response.json()
 }
 
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+async function fetchSpotifyUserId(accessToken) {
+  const response = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`Spotify profile request failed (${response.status}): ${details}`)
+  }
+
+  const payload = await response.json()
+  if (!payload?.id) {
+    throw new Error('Spotify user id was not found in profile response.')
+  }
+
+  return payload.id
+}
+
+async function fetchPlaylistTracks(provider, accessToken, playlistId) {
+  if (provider === 'spotify') {
+    const response = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    })
+
+    if (!response.ok) {
+      const details = await response.text()
+      throw new Error(`Spotify playlist tracks request failed (${response.status}): ${details}`)
+    }
+
+    const payload = await response.json()
+    const items = Array.isArray(payload?.items) ? payload.items : []
+    return items
+      .map(item => item?.track)
+      .filter(Boolean)
+      .map(track => ({
+        id: track?.id ? String(track.id) : '',
+        title: track?.name ?? '',
+        artist: Array.isArray(track?.artists) ? (track.artists[0]?.name ?? '') : ''
+      }))
+      .filter(track => track.id && track.title)
+  }
+
+  const response = await fetch(`https://api.soundcloud.com/playlists/${encodeURIComponent(playlistId)}?oauth_token=${encodeURIComponent(accessToken)}`)
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`SoundCloud playlist tracks request failed (${response.status}): ${details}`)
+  }
+
+  const payload = await response.json()
+  const tracks = Array.isArray(payload?.tracks) ? payload.tracks : []
+  return tracks.map(track => ({
+    id: track?.id ? String(track.id) : '',
+    title: track?.title ?? '',
+    artist: track?.user?.username ?? ''
+  })).filter(track => track.id && track.title)
+}
+
+async function findSpotifyTrackUri(accessToken, track) {
+  const query = `${track.title} ${track.artist}`.trim()
+  if (!query) return null
+
+  const response = await fetch(`https://api.spotify.com/v1/search?${queryString({ q: query, type: 'track', limit: '1' })}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  })
+
+  if (!response.ok) return null
+  const payload = await response.json()
+  return payload?.tracks?.items?.[0]?.uri ?? null
+}
+
+async function findSoundCloudTrackId(accessToken, track) {
+  const query = `${track.title} ${track.artist}`.trim()
+  if (!query) return null
+
+  const response = await fetch(`https://api.soundcloud.com/tracks?${queryString({ q: query, limit: '1', oauth_token: accessToken })}`)
+  if (!response.ok) return null
+  const payload = await response.json()
+  const items = Array.isArray(payload) ? payload : (Array.isArray(payload?.collection) ? payload.collection : [])
+  return items?.[0]?.id ? String(items[0].id) : null
+}
+
+async function createDestinationPlaylist(provider, accessToken, playlistName) {
+  if (provider === 'spotify') {
+    const userId = await fetchSpotifyUserId(accessToken)
+    const response = await fetch(`https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: playlistName, public: false })
+    })
+
+    if (!response.ok) {
+      const details = await response.text()
+      throw new Error(`Spotify playlist create failed (${response.status}): ${details}`)
+    }
+
+    const payload = await response.json()
+    return { id: payload?.id ? String(payload.id) : '', name: payload?.name || playlistName }
+  }
+
+  const response = await fetch('https://api.soundcloud.com/playlists', {
+    method: 'POST',
+    headers: { Authorization: `OAuth ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist: { title: playlistName, sharing: 'private' } })
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`SoundCloud playlist create failed (${response.status}): ${details}`)
+  }
+
+  const payload = await response.json()
+  return { id: payload?.id ? String(payload.id) : '', name: payload?.title || playlistName }
+}
+
+async function appendTracksToPlaylist(provider, accessToken, playlistId, tracks) {
+  if (!tracks.length) return 0
+
+  if (provider === 'spotify') {
+    const uris = []
+    for (const track of tracks) {
+      const uri = await findSpotifyTrackUri(accessToken, track)
+      if (uri) uris.push(uri)
+    }
+
+    if (!uris.length) return 0
+    const response = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uris })
+    })
+
+    if (!response.ok) {
+      const details = await response.text()
+      throw new Error(`Spotify playlist update failed (${response.status}): ${details}`)
+    }
+
+    return uris.length
+  }
+
+  const targetTracks = []
+  for (const track of tracks) {
+    const id = await findSoundCloudTrackId(accessToken, track)
+    if (id) targetTracks.push({ id })
+  }
+
+  if (!targetTracks.length) return 0
+  const response = await fetch(`https://api.soundcloud.com/playlists/${encodeURIComponent(playlistId)}?oauth_token=${encodeURIComponent(accessToken)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist: { tracks: targetTracks } })
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`SoundCloud playlist update failed (${response.status}): ${details}`)
+  }
+
+  return targetTracks.length
+}
+
+async function syncMapping(user, mapping) {
+  const sourceProvider = String(mapping?.sourceProvider || '').toLowerCase()
+  const targetProvider = String(mapping?.targetProvider || '').toLowerCase()
+
+  if (!['spotify', 'soundcloud'].includes(sourceProvider) || !['spotify', 'soundcloud'].includes(targetProvider)) {
+    return { importedCount: 0, exportedCount: 0, skippedCount: 0 }
+  }
+
+  const sourceToken = getAccessTokenForProvider(user, sourceProvider)
+  const targetToken = getAccessTokenForProvider(user, targetProvider)
+  if (!sourceToken || !targetToken) {
+    return { importedCount: 0, exportedCount: 0, skippedCount: 0 }
+  }
+
+  const sourcePlaylists = await fetchProviderPlaylists(sourceProvider, sourceToken)
+  const targetPlaylists = await fetchProviderPlaylists(targetProvider, targetToken)
+
+  const sourcePlaylistRef = String(mapping?.sourcePlaylistId || '').trim()
+  const targetPlaylistRef = String(mapping?.targetPlaylistId || '').trim()
+
+  const sourcePlaylist = sourcePlaylists.find(p => p.id === sourcePlaylistRef || normalizeText(p.name) === normalizeText(sourcePlaylistRef))
+  if (!sourcePlaylist) {
+    return { importedCount: 0, exportedCount: 0, skippedCount: 1 }
+  }
+
+  let targetPlaylist = targetPlaylists.find(p => p.id === targetPlaylistRef || normalizeText(p.name) === normalizeText(targetPlaylistRef))
+  if (!targetPlaylist && mapping?.createTargetIfMissing !== false) {
+    const desiredName = sourcePlaylist.name || targetPlaylistRef
+    targetPlaylist = await createDestinationPlaylist(targetProvider, targetToken, desiredName)
+  }
+
+  if (!targetPlaylist) {
+    return { importedCount: 0, exportedCount: 0, skippedCount: 1 }
+  }
+
+  const sourceTracks = await fetchPlaylistTracks(sourceProvider, sourceToken, sourcePlaylist.id)
+  const targetTracks = await fetchPlaylistTracks(targetProvider, targetToken, targetPlaylist.id)
+  const targetKeys = new Set(targetTracks.map(track => `${normalizeText(track.title)}::${normalizeText(track.artist)}`))
+  const missingTracks = sourceTracks.filter(track => !targetKeys.has(`${normalizeText(track.title)}::${normalizeText(track.artist)}`))
+
+  const transferred = await appendTracksToPlaylist(targetProvider, targetToken, targetPlaylist.id, missingTracks)
+  return {
+    importedCount: sourceTracks.length,
+    exportedCount: transferred,
+    skippedCount: Math.max(sourceTracks.length - transferred, 0)
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
@@ -229,7 +442,9 @@ const server = http.createServer(async (req, res) => {
       const next = body?.[provider]
       if (!next) continue
       oauthConfig[provider].clientId = (next.clientId || '').trim()
-      oauthConfig[provider].clientSecret = (next.clientSecret || '').trim()
+      if (typeof next.clientSecret === 'string' && next.clientSecret.trim()) {
+        return send(res, 400, 'Client secrets must be provided via secure server environment variables, not through the browser.')
+      }
       oauthConfig[provider].callbackUrl = (next.callbackUrl || oauthConfig[provider].callbackUrl).trim()
       if (oauthConfig[provider].callbackUrl && !isHttpsUrl(oauthConfig[provider].callbackUrl)) {
         return send(res, 400, `${provider} callback URL must be HTTPS.`)
@@ -362,19 +577,33 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/sync/run-now' && req.method === 'POST') {
     const { userId, user } = getOrCreateUser(req)
-    const now = new Date().toISOString()
+    const startedAt = new Date().toISOString()
     const run = {
       id: randomUUID(),
       syncJobId: randomUUID(),
       status: 'Completed',
-      startedAt: now,
-      endedAt: new Date(Date.now() + 500).toISOString(),
+      startedAt,
+      endedAt: startedAt,
       importedCount: 0,
       exportedCount: 0,
       skippedCount: 0,
       error: null,
       idempotencyKey: req.headers['idempotency-key'] || randomUUID().replaceAll('-', '')
     }
+
+    try {
+      for (const mapping of user.profile.playlistMappings || []) {
+        const result = await syncMapping(user, mapping)
+        run.importedCount += result.importedCount
+        run.exportedCount += result.exportedCount
+        run.skippedCount += result.skippedCount
+      }
+    } catch (error) {
+      run.status = 'Failed'
+      run.error = String(error.message || error)
+    }
+
+    run.endedAt = new Date().toISOString()
     user.runs.unshift(run)
     user.runs = user.runs.slice(0, 25)
     return send(res, 202, run, { 'Set-Cookie': cookieHeader(userId) })
