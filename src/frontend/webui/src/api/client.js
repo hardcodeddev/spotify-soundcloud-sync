@@ -65,3 +65,15 @@ export function getProviderStartUrl(provider) {
 export function getPlaylists(provider) {
   return request(`/sync/playlists?provider=${encodeURIComponent(provider)}`)
 }
+
+
+export function getAuthConfig() {
+  return request('/auth/config')
+}
+
+export function saveAuthConfig(config) {
+  return request('/auth/config', {
+    method: 'PUT',
+    body: JSON.stringify(config)
+  })
+}

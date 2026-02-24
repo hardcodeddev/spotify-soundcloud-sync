@@ -3,8 +3,23 @@ import { randomUUID } from 'node:crypto'
 
 const port = Number(process.env.PORT || 5000)
 const webOrigin = process.env.WEB_ORIGIN || 'http://localhost:5173'
+const apiPublicBaseUrl = process.env.API_PUBLIC_BASE_URL || `http://localhost:${port}`
 
 const users = new Map()
+const oauthStates = new Map()
+
+const oauthConfig = {
+  spotify: {
+    clientId: process.env.SPOTIFY_CLIENT_ID || '',
+    clientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
+    callbackUrl: process.env.SPOTIFY_CALLBACK_URL || `${apiPublicBaseUrl}/auth/spotify/callback`
+  },
+  soundcloud: {
+    clientId: process.env.SOUNDCLOUD_CLIENT_ID || '',
+    clientSecret: process.env.SOUNDCLOUD_CLIENT_SECRET || '',
+    callbackUrl: process.env.SOUNDCLOUD_CALLBACK_URL || `${apiPublicBaseUrl}/auth/soundcloud/callback`
+  }
+}
 
 const providerPlaylists = {
   spotify: [
@@ -18,7 +33,6 @@ const providerPlaylists = {
     { id: 'sc-archive', name: 'Archive' }
   ]
 }
-
 
 function parseCookies(cookieHeader = '') {
   return Object.fromEntries(cookieHeader.split(';').map(v => v.trim()).filter(Boolean).map(part => {
@@ -65,6 +79,10 @@ function getOrCreateUser(req, explicitUserId) {
         spotify: { connected: false, expiresAt: null, lastRefreshResult: 'never' },
         soundcloud: { connected: false, expiresAt: null, lastRefreshResult: 'never' }
       },
+      tokens: {
+        spotify: null,
+        soundcloud: null
+      },
       profile: {
         id: randomUUID(),
         direction: 'OneWay',
@@ -84,6 +102,67 @@ function cookieHeader(userId) {
   return `playlist_sync_user=${encodeURIComponent(userId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`
 }
 
+function providerOauthUrls(provider) {
+  if (provider === 'spotify') {
+    return {
+      authorizeUrl: 'https://accounts.spotify.com/authorize',
+      tokenUrl: 'https://accounts.spotify.com/api/token',
+      scope: 'playlist-read-private playlist-modify-private playlist-modify-public'
+    }
+  }
+
+  return {
+    authorizeUrl: 'https://soundcloud.com/connect',
+    tokenUrl: 'https://api.soundcloud.com/oauth2/token',
+    scope: 'non-expiring'
+  }
+}
+
+function queryString(values) {
+  return new URLSearchParams(values).toString()
+}
+
+function getSafeConfig() {
+  return {
+    spotify: {
+      clientId: oauthConfig.spotify.clientId,
+      hasClientSecret: Boolean(oauthConfig.spotify.clientSecret),
+      callbackUrl: oauthConfig.spotify.callbackUrl
+    },
+    soundcloud: {
+      clientId: oauthConfig.soundcloud.clientId,
+      hasClientSecret: Boolean(oauthConfig.soundcloud.clientSecret),
+      callbackUrl: oauthConfig.soundcloud.callbackUrl
+    }
+  }
+}
+
+async function exchangeCodeForToken(provider, code) {
+  const cfg = oauthConfig[provider]
+  const { tokenUrl } = providerOauthUrls(provider)
+
+  const body = queryString({
+    grant_type: 'authorization_code',
+    code,
+    redirect_uri: cfg.callbackUrl,
+    client_id: cfg.clientId,
+    client_secret: cfg.clientSecret
+  })
+
+  const response = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  })
+
+  if (!response.ok) {
+    const message = await response.text()
+    throw new Error(message || `Token exchange failed (${response.status})`)
+  }
+
+  return response.json()
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
@@ -98,33 +177,88 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { status: 'ok' })
   }
 
+  if (url.pathname === '/auth/config' && req.method === 'GET') {
+    return send(res, 200, getSafeConfig())
+  }
+
+  if (url.pathname === '/auth/config' && req.method === 'PUT') {
+    const body = await parseBody(req)
+    for (const provider of ['spotify', 'soundcloud']) {
+      const next = body?.[provider]
+      if (!next) continue
+      oauthConfig[provider].clientId = (next.clientId || '').trim()
+      oauthConfig[provider].clientSecret = (next.clientSecret || '').trim()
+      oauthConfig[provider].callbackUrl = (next.callbackUrl || oauthConfig[provider].callbackUrl).trim()
+    }
+    return send(res, 200, getSafeConfig())
+  }
+
   if (url.pathname === '/auth/connections' && req.method === 'GET') {
     const { userId, user } = getOrCreateUser(req)
     return send(res, 200, user.connections, { 'Set-Cookie': cookieHeader(userId) })
   }
 
-  if (url.pathname === '/auth/spotify/start' && req.method === 'GET') {
+  if (url.pathname.startsWith('/auth/') && url.pathname.endsWith('/start') && req.method === 'GET') {
+    const provider = url.pathname.split('/')[2]
+    if (!['spotify', 'soundcloud'].includes(provider)) {
+      return send(res, 404, 'Unknown provider')
+    }
+
+    const cfg = oauthConfig[provider]
+    if (!cfg.clientId || !cfg.clientSecret) {
+      return send(res, 400, `${provider} client credentials are not configured. Open Connections and save Client ID/Secret first.`)
+    }
+
     const { userId } = getOrCreateUser(req, url.searchParams.get('userId') || '')
-    return send(res, 302, '', { 'Set-Cookie': cookieHeader(userId), Location: `/auth/spotify/callback?code=mock&state=mock&userId=${encodeURIComponent(userId)}` })
+    const state = randomUUID().replaceAll('-', '')
+    oauthStates.set(state, { provider, userId, expiresAt: Date.now() + 10 * 60 * 1000 })
+
+    const { authorizeUrl, scope } = providerOauthUrls(provider)
+    const redirectUrl = `${authorizeUrl}?${queryString({
+      client_id: cfg.clientId,
+      response_type: 'code',
+      redirect_uri: cfg.callbackUrl,
+      scope,
+      state
+    })}`
+
+    return send(res, 302, '', { 'Set-Cookie': cookieHeader(userId), Location: redirectUrl })
   }
 
-  if (url.pathname === '/auth/soundcloud/start' && req.method === 'GET') {
-    const { userId } = getOrCreateUser(req, url.searchParams.get('userId') || '')
-    return send(res, 302, '', { 'Set-Cookie': cookieHeader(userId), Location: `/auth/soundcloud/callback?code=mock&state=mock&userId=${encodeURIComponent(userId)}` })
-  }
+  if (url.pathname.startsWith('/auth/') && url.pathname.endsWith('/callback') && req.method === 'GET') {
+    const provider = url.pathname.split('/')[2]
+    if (!['spotify', 'soundcloud'].includes(provider)) {
+      return send(res, 404, 'Unknown provider')
+    }
 
-  if (url.pathname === '/auth/spotify/callback' && req.method === 'GET') {
-    const { userId, user } = getOrCreateUser(req, url.searchParams.get('userId') || '')
-    user.connections.spotify = { connected: true, expiresAt: null, lastRefreshResult: 'connected' }
-    return send(res, 200, '<html><body><h3>Spotify connected.</h3><script>window.close()</script></body></html>', { 'Content-Type': 'text/html', 'Set-Cookie': cookieHeader(userId) })
-  }
+    const code = url.searchParams.get('code') || ''
+    const state = url.searchParams.get('state') || ''
+    const stateRecord = oauthStates.get(state)
 
-  if (url.pathname === '/auth/soundcloud/callback' && req.method === 'GET') {
-    const { userId, user } = getOrCreateUser(req, url.searchParams.get('userId') || '')
-    user.connections.soundcloud = { connected: true, expiresAt: null, lastRefreshResult: 'connected' }
-    return send(res, 200, '<html><body><h3>SoundCloud connected.</h3><script>window.close()</script></body></html>', { 'Content-Type': 'text/html', 'Set-Cookie': cookieHeader(userId) })
-  }
+    if (!code || !stateRecord || stateRecord.provider !== provider || stateRecord.expiresAt < Date.now()) {
+      return send(res, 400, `<html><body><h3>${provider} connection failed (invalid or expired state).</h3></body></html>`, { 'Content-Type': 'text/html' })
+    }
 
+    oauthStates.delete(state)
+
+    try {
+      const token = await exchangeCodeForToken(provider, code)
+      const { userId, user } = getOrCreateUser(req, stateRecord.userId)
+      user.tokens[provider] = token
+
+      const expiresAt = token.expires_in ? new Date(Date.now() + (Number(token.expires_in) * 1000)).toISOString() : null
+      user.connections[provider] = {
+        connected: true,
+        expiresAt,
+        lastRefreshResult: 'connected'
+      }
+
+      const providerTitle = provider === 'spotify' ? 'Spotify' : 'SoundCloud'
+      return send(res, 200, `<html><body><h3>${providerTitle} connected.</h3><script>window.close()</script></body></html>`, { 'Content-Type': 'text/html', 'Set-Cookie': cookieHeader(userId) })
+    } catch (error) {
+      return send(res, 502, `<html><body><h3>${provider} token exchange failed.</h3><pre>${String(error.message || error)}</pre></body></html>`, { 'Content-Type': 'text/html' })
+    }
+  }
 
   if (url.pathname === '/sync/playlists' && req.method === 'GET') {
     const provider = (url.searchParams.get('provider') || '').toLowerCase()
@@ -132,16 +266,11 @@ const server = http.createServer(async (req, res) => {
       return send(res, 400, { error: 'Unsupported provider.' })
     }
 
-    const playlists = providerPlaylists[provider].map(p => ({
-      id: p.id,
-      name: p.name
-    }))
-
+    const playlists = providerPlaylists[provider].map(p => ({ id: p.id, name: p.name }))
     return send(res, 200, playlists)
   }
 
   if (url.pathname === '/sync/profile' && req.method === 'GET') {
-
     const { userId, user } = getOrCreateUser(req)
     return send(res, 200, user.profile, { 'Set-Cookie': cookieHeader(userId) })
   }
