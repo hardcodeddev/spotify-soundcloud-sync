@@ -495,13 +495,6 @@ async function syncMapping(user, mapping) {
     const message = String(error?.message || error)
     logSyncError(`mapping ${sourceProvider}->${targetProvider}`, error)
 
-    if (sourceProvider === 'spotify' && message.includes('403 Forbidden')) {
-      result.status = 'Skipped'
-      result.skippedCount = 1
-      result.warning = message
-      return result
-    }
-
     result.status = 'Failed'
     result.error = message
     return result
