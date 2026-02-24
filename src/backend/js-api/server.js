@@ -205,6 +205,279 @@ async function exchangeCodeForToken(provider, code) {
   return response.json()
 }
 
+
+
+function logSyncError(context, error) {
+  const message = String(error?.message || error)
+  console.error(`[sync] ${context}: ${message}`)
+  if (error?.stack) {
+    console.error(error.stack)
+  }
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+async function fetchSpotifyUserId(accessToken) {
+  const response = await fetch('https://api.spotify.com/v1/me', {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`Spotify profile request failed (${response.status}): ${details}`)
+  }
+
+  const payload = await response.json()
+  if (!payload?.id) {
+    throw new Error('Spotify user id was not found in profile response.')
+  }
+
+  return payload.id
+}
+
+async function fetchPlaylistTracks(provider, accessToken, playlistId) {
+  if (provider === 'spotify') {
+    const response = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
+    })
+
+    if (!response.ok) {
+      const details = await response.text()
+      throw new Error(`Spotify playlist tracks request failed (${response.status}): ${details}`)
+    }
+
+    const payload = await response.json()
+    const items = Array.isArray(payload?.items) ? payload.items : []
+    return items
+      .map(item => item?.track)
+      .filter(Boolean)
+      .map(track => ({
+        id: track?.id ? String(track.id) : '',
+        title: track?.name ?? '',
+        artist: Array.isArray(track?.artists) ? (track.artists[0]?.name ?? '') : ''
+      }))
+      .filter(track => track.id && track.title)
+  }
+
+  const response = await fetch(`https://api.soundcloud.com/playlists/${encodeURIComponent(playlistId)}?oauth_token=${encodeURIComponent(accessToken)}`)
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`SoundCloud playlist tracks request failed (${response.status}): ${details}`)
+  }
+
+  const payload = await response.json()
+  const tracks = Array.isArray(payload?.tracks) ? payload.tracks : []
+  return tracks.map(track => ({
+    id: track?.id ? String(track.id) : '',
+    title: track?.title ?? '',
+    artist: track?.user?.username ?? ''
+  })).filter(track => track.id && track.title)
+}
+
+async function findSpotifyTrackUri(accessToken, track) {
+  const query = `${track.title} ${track.artist}`.trim()
+  if (!query) return null
+
+  const response = await fetch(`https://api.spotify.com/v1/search?${queryString({ q: query, type: 'track', limit: '1' })}`, {
+    headers: { Authorization: `Bearer ${accessToken}` }
+  })
+
+  if (!response.ok) return null
+  const payload = await response.json()
+  return payload?.tracks?.items?.[0]?.uri ?? null
+}
+
+async function findSoundCloudTrackId(accessToken, track) {
+  const query = `${track.title} ${track.artist}`.trim()
+  if (!query) return null
+
+  const response = await fetch(`https://api.soundcloud.com/tracks?${queryString({ q: query, limit: '1', oauth_token: accessToken })}`)
+  if (!response.ok) return null
+  const payload = await response.json()
+  const items = Array.isArray(payload) ? payload : (Array.isArray(payload?.collection) ? payload.collection : [])
+  return items?.[0]?.id ? String(items[0].id) : null
+}
+
+async function createDestinationPlaylist(provider, accessToken, playlistName) {
+  if (provider === 'spotify') {
+    const userId = await fetchSpotifyUserId(accessToken)
+    const response = await fetch(`https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: playlistName, public: false })
+    })
+
+    if (!response.ok) {
+      const details = await response.text()
+      throw new Error(`Spotify playlist create failed (${response.status}): ${details}`)
+    }
+
+    const payload = await response.json()
+    return { id: payload?.id ? String(payload.id) : '', name: payload?.name || playlistName }
+  }
+
+  const response = await fetch('https://api.soundcloud.com/playlists', {
+    method: 'POST',
+    headers: { Authorization: `OAuth ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist: { title: playlistName, sharing: 'private' } })
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`SoundCloud playlist create failed (${response.status}): ${details}`)
+  }
+
+  const payload = await response.json()
+  return { id: payload?.id ? String(payload.id) : '', name: payload?.title || playlistName }
+}
+
+async function appendTracksToPlaylist(provider, accessToken, playlistId, tracks, existingTracks = []) {
+  if (!tracks.length) return 0
+
+  if (provider === 'spotify') {
+    const uris = []
+    for (const track of tracks) {
+      const uri = await findSpotifyTrackUri(accessToken, track)
+      if (uri) uris.push(uri)
+    }
+
+    if (!uris.length) return 0
+
+    let addedCount = 0
+    for (let i = 0; i < uris.length; i += 100) {
+      const chunk = uris.slice(i, i + 100)
+      const response = await fetch(`https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uris: chunk })
+      })
+
+      if (!response.ok) {
+        const details = await response.text()
+        throw new Error(`Spotify playlist update failed (${response.status}): ${details}`)
+      }
+
+      addedCount += chunk.length
+    }
+
+    return addedCount
+  }
+
+  const existingTrackIds = Array.isArray(existingTracks)
+    ? existingTracks.map(track => String(track?.id || '')).filter(Boolean)
+    : []
+
+  const newTrackIds = []
+  for (const track of tracks) {
+    const id = await findSoundCloudTrackId(accessToken, track)
+    if (id) newTrackIds.push(String(id))
+  }
+
+  if (!newTrackIds.length) return 0
+
+  const dedupedTrackIds = []
+  const seen = new Set()
+  for (const id of [...existingTrackIds, ...newTrackIds]) {
+    if (!seen.has(id)) {
+      seen.add(id)
+      dedupedTrackIds.push(id)
+    }
+  }
+
+  const payloadTracks = dedupedTrackIds.map(id => ({ id }))
+
+  const response = await fetch(`https://api.soundcloud.com/playlists/${encodeURIComponent(playlistId)}?oauth_token=${encodeURIComponent(accessToken)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ playlist: { tracks: payloadTracks } })
+  })
+
+  if (!response.ok) {
+    const details = await response.text()
+    throw new Error(`SoundCloud playlist update failed (${response.status}): ${details}`)
+  }
+
+  return newTrackIds.length
+}
+
+async function syncMapping(user, mapping) {
+  const sourceProvider = String(mapping?.sourceProvider || '').toLowerCase()
+  const targetProvider = String(mapping?.targetProvider || '').toLowerCase()
+
+  const result = {
+    importedCount: 0,
+    exportedCount: 0,
+    skippedCount: 0,
+    status: 'Completed',
+    warning: null,
+    error: null,
+    sourceProvider,
+    targetProvider,
+    sourcePlaylistRef: String(mapping?.sourcePlaylistId || '').trim(),
+    targetPlaylistRef: String(mapping?.targetPlaylistId || '').trim()
+  }
+
+  if (!['spotify', 'soundcloud'].includes(sourceProvider) || !['spotify', 'soundcloud'].includes(targetProvider)) {
+    result.status = 'Skipped'
+    result.warning = 'Unsupported mapping providers.'
+    return result
+  }
+
+  const sourceToken = getAccessTokenForProvider(user, sourceProvider)
+  const targetToken = getAccessTokenForProvider(user, targetProvider)
+  if (!sourceToken || !targetToken) {
+    result.status = 'Skipped'
+    result.warning = 'Missing source/target provider connection.'
+    return result
+  }
+
+  try {
+    const sourcePlaylists = await fetchProviderPlaylists(sourceProvider, sourceToken)
+    const targetPlaylists = await fetchProviderPlaylists(targetProvider, targetToken)
+
+    const sourcePlaylist = sourcePlaylists.find(p => p.id === result.sourcePlaylistRef || normalizeText(p.name) === normalizeText(result.sourcePlaylistRef))
+    if (!sourcePlaylist) {
+      result.status = 'Skipped'
+      result.skippedCount = 1
+      result.warning = `Source playlist not found: ${result.sourcePlaylistRef || '(empty)'}`
+      return result
+    }
+
+    let targetPlaylist = targetPlaylists.find(p => p.id === result.targetPlaylistRef || normalizeText(p.name) === normalizeText(result.targetPlaylistRef))
+    if (!targetPlaylist && mapping?.createTargetIfMissing !== false) {
+      const desiredName = sourcePlaylist.name || result.targetPlaylistRef || 'Synced Playlist'
+      targetPlaylist = await createDestinationPlaylist(targetProvider, targetToken, desiredName)
+      result.targetPlaylistRef = targetPlaylist.id
+    }
+
+    if (!targetPlaylist) {
+      result.status = 'Skipped'
+      result.skippedCount = 1
+      result.warning = `Target playlist not found: ${result.targetPlaylistRef || '(empty)'}`
+      return result
+    }
+
+    const sourceTracks = await fetchPlaylistTracks(sourceProvider, sourceToken, sourcePlaylist.id)
+    const targetTracks = await fetchPlaylistTracks(targetProvider, targetToken, targetPlaylist.id)
+    const targetKeys = new Set(targetTracks.map(track => `${normalizeText(track.title)}::${normalizeText(track.artist)}`))
+    const missingTracks = sourceTracks.filter(track => !targetKeys.has(`${normalizeText(track.title)}::${normalizeText(track.artist)}`))
+
+    const transferred = await appendTracksToPlaylist(targetProvider, targetToken, targetPlaylist.id, missingTracks, targetTracks)
+
+    result.importedCount = sourceTracks.length
+    result.exportedCount = transferred
+    result.skippedCount = Math.max(sourceTracks.length - transferred, 0)
+    return result
+  } catch (error) {
+    logSyncError(`mapping ${sourceProvider}->${targetProvider}`, error)
+    result.status = 'Failed'
+    result.error = String(error?.message || error)
+    return result
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host}`)
 
@@ -229,7 +502,9 @@ const server = http.createServer(async (req, res) => {
       const next = body?.[provider]
       if (!next) continue
       oauthConfig[provider].clientId = (next.clientId || '').trim()
-      oauthConfig[provider].clientSecret = (next.clientSecret || '').trim()
+      if (typeof next.clientSecret === 'string' && next.clientSecret.trim()) {
+        return send(res, 400, 'Client secrets must be provided via secure server environment variables, not through the browser.')
+      }
       oauthConfig[provider].callbackUrl = (next.callbackUrl || oauthConfig[provider].callbackUrl).trim()
       if (oauthConfig[provider].callbackUrl && !isHttpsUrl(oauthConfig[provider].callbackUrl)) {
         return send(res, 400, `${provider} callback URL must be HTTPS.`)
@@ -362,19 +637,43 @@ const server = http.createServer(async (req, res) => {
 
   if (url.pathname === '/sync/run-now' && req.method === 'POST') {
     const { userId, user } = getOrCreateUser(req)
-    const now = new Date().toISOString()
+    const startedAt = new Date().toISOString()
     const run = {
       id: randomUUID(),
       syncJobId: randomUUID(),
       status: 'Completed',
-      startedAt: now,
-      endedAt: new Date(Date.now() + 500).toISOString(),
+      startedAt,
+      endedAt: startedAt,
       importedCount: 0,
       exportedCount: 0,
       skippedCount: 0,
       error: null,
+      mappingResults: [],
       idempotencyKey: req.headers['idempotency-key'] || randomUUID().replaceAll('-', '')
     }
+
+    const mappings = user.profile.playlistMappings || []
+    if (!mappings.length) {
+      run.status = 'Failed'
+      run.error = 'No playlist mappings configured. Save at least one mapping in Sync Configuration.'
+      logSyncError('run-now', run.error)
+    } else {
+      for (const mapping of mappings) {
+        const result = await syncMapping(user, mapping)
+        run.mappingResults.push(result)
+        run.importedCount += result.importedCount
+        run.exportedCount += result.exportedCount
+        run.skippedCount += result.skippedCount
+      }
+
+      const failedResults = run.mappingResults.filter(item => item.status === 'Failed')
+      if (failedResults.length) {
+        run.status = 'Failed'
+        run.error = failedResults.map(item => item.error).filter(Boolean).join('; ')
+      }
+    }
+
+    run.endedAt = new Date().toISOString()
     user.runs.unshift(run)
     user.runs = user.runs.slice(0, 25)
     return send(res, 202, run, { 'Set-Cookie': cookieHeader(userId) })

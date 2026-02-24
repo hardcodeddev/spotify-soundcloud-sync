@@ -12,8 +12,13 @@ function RunNowPanel() {
 
   const runNow = async () => {
     try {
-      await runSyncNow()
-      setStatus({ type: 'info', text: 'Sync started. Polling latest run...' })
+      const started = await runSyncNow()
+      setStatus({
+        type: started.status === 'Failed' ? 'error' : 'info',
+        text: started.status === 'Failed'
+          ? `Sync failed: ${started.error || 'Unknown error'}`
+          : 'Sync started. Polling latest run...'
+      })
 
       const poller = window.setInterval(async () => {
         try {
@@ -24,12 +29,20 @@ function RunNowPanel() {
           })
 
           if (latest.status === 'Completed') {
-            setStatus({ type: 'success', text: 'Latest sync run completed.' })
+            const warningCount = Array.isArray(latest.mappingResults)
+              ? latest.mappingResults.filter(item => item.status === 'Skipped').length
+              : 0
+            setStatus({
+              type: warningCount ? 'info' : 'success',
+              text: warningCount
+                ? `Latest sync run completed with ${warningCount} skipped mapping(s).`
+                : 'Latest sync run completed.'
+            })
             window.clearInterval(poller)
           }
 
           if (latest.status === 'Failed') {
-            setStatus({ type: 'error', text: 'Latest sync run failed.' })
+            setStatus({ type: 'error', text: `Latest sync run failed: ${latest.error || 'Unknown error'}` })
             window.clearInterval(poller)
           }
         } catch {
@@ -57,6 +70,7 @@ function RunNowPanel() {
             <th>Imported</th>
             <th>Exported</th>
             <th>Skipped</th>
+            <th>Error</th>
           </tr>
         </thead>
         <tbody>
@@ -67,11 +81,12 @@ function RunNowPanel() {
               <td>{run.importedCount}</td>
               <td>{run.exportedCount}</td>
               <td>{run.skippedCount}</td>
+              <td>{run.error || '-'}</td>
             </tr>
           ))}
           {!runs.length && (
             <tr>
-              <td colSpan="5">No sync runs yet.</td>
+              <td colSpan="6">No sync runs yet.</td>
             </tr>
           )}
         </tbody>
