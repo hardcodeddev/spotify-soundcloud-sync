@@ -5,8 +5,8 @@ function ConnectionsPage() {
   const [connections, setConnections] = useState(null)
   const [banner, setBanner] = useState(null)
   const [authConfig, setAuthConfig] = useState({
-    spotify: { clientId: '', clientSecret: '', callbackUrl: '' },
-    soundcloud: { clientId: '', clientSecret: '', callbackUrl: '' }
+    spotify: { clientId: '', clientSecret: '', callbackUrl: 'https://<your-tunnel-domain>/auth/spotify/callback' },
+    soundcloud: { clientId: '', clientSecret: '', callbackUrl: 'https://<your-tunnel-domain>/auth/soundcloud/callback' }
   })
 
   const loadConnections = async () => {
@@ -96,7 +96,7 @@ function ConnectionsPage() {
       {banner && <div className={`banner ${banner.type}`}>{banner.message}</div>}
 
       <h3>OAuth Client Settings</h3>
-      <p>Set your real Spotify and SoundCloud client credentials here before connecting.</p>
+      <p>Set your real Spotify and SoundCloud client credentials here before connecting. Callback URLs must be HTTPS (for example via ngrok/cloudflare tunnel).</p>
       <div className="provider-grid">
         {statuses.map(({ provider, label }) => (
           <article key={`${provider}-settings`} className="provider-card">

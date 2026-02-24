@@ -12,8 +12,12 @@ function SyncConfigPage() {
   const [message, setMessage] = useState(null)
 
   const loadProviderPlaylists = async (provider) => {
-    const items = await getPlaylists(provider)
-    setPlaylistOptions((current) => ({ ...current, [provider]: items }))
+    try {
+      const items = await getPlaylists(provider)
+      setPlaylistOptions((current) => ({ ...current, [provider]: items }))
+    } catch {
+      setPlaylistOptions((current) => ({ ...current, [provider]: [] }))
+    }
   }
 
   useEffect(() => {
@@ -30,7 +34,7 @@ function SyncConfigPage() {
         setCronExpression(profile.schedule?.cronExpression ?? '')
         setPlaylistMappings(profile.playlistMappings?.length ? profile.playlistMappings : [EMPTY_MAPPING])
       } catch {
-        setMessage({ type: 'error', text: 'Unable to load sync config.' })
+        setMessage({ type: 'error', text: 'Unable to load sync config. Connect providers to load live playlist dropdowns.' })
       }
     }
 
