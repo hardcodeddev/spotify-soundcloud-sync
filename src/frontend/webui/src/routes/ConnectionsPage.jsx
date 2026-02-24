@@ -5,8 +5,8 @@ function ConnectionsPage() {
   const [connections, setConnections] = useState(null)
   const [banner, setBanner] = useState(null)
   const [authConfig, setAuthConfig] = useState({
-    spotify: { clientId: '', clientSecret: '', callbackUrl: 'https://<your-tunnel-domain>/auth/spotify/callback' },
-    soundcloud: { clientId: '', clientSecret: '', callbackUrl: 'https://<your-tunnel-domain>/auth/soundcloud/callback' }
+    spotify: { clientId: '', callbackUrl: 'https://<your-tunnel-domain>/auth/spotify/callback' },
+    soundcloud: { clientId: '', callbackUrl: 'https://<your-tunnel-domain>/auth/soundcloud/callback' }
   })
 
   const loadConnections = async () => {
@@ -20,12 +20,10 @@ function ConnectionsPage() {
     setAuthConfig((current) => ({
       spotify: {
         clientId: data.spotify?.clientId ?? current.spotify.clientId,
-        clientSecret: '',
         callbackUrl: data.spotify?.callbackUrl ?? current.spotify.callbackUrl
       },
       soundcloud: {
         clientId: data.soundcloud?.clientId ?? current.soundcloud.clientId,
-        clientSecret: '',
         callbackUrl: data.soundcloud?.callbackUrl ?? current.soundcloud.callbackUrl
       }
     }))
@@ -96,7 +94,7 @@ function ConnectionsPage() {
       {banner && <div className={`banner ${banner.type}`}>{banner.message}</div>}
 
       <h3>OAuth Client Settings</h3>
-      <p>Set your real Spotify and SoundCloud client credentials here before connecting. Callback URLs must be HTTPS (for example via ngrok/cloudflare tunnel).</p>
+      <p>Set public client settings here before connecting. Client secrets are intentionally not editable in the browser and must be configured as secure server environment variables (required for safe public/GitHub Pages usage). Callback URLs must be HTTPS.</p>
       <div className="provider-grid">
         {statuses.map(({ provider, label }) => (
           <article key={`${provider}-settings`} className="provider-card">
@@ -104,10 +102,6 @@ function ConnectionsPage() {
             <label>
               Client ID
               <input value={authConfig[provider].clientId} onChange={(event) => updateProviderConfig(provider, 'clientId', event.target.value)} />
-            </label>
-            <label>
-              Client Secret
-              <input type="password" value={authConfig[provider].clientSecret} onChange={(event) => updateProviderConfig(provider, 'clientSecret', event.target.value)} />
             </label>
             <label>
               Callback URL

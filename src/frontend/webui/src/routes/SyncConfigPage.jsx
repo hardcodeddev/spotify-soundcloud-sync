@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
 import { getPlaylists, getSyncProfile, saveSyncProfile, saveSyncSchedule } from '../api/client'
 
-const EMPTY_MAPPING = { sourceProvider: 'spotify', sourcePlaylistId: '', targetProvider: 'soundcloud', targetPlaylistId: '' }
+const EMPTY_MAPPING = {
+  sourceProvider: 'spotify',
+  sourcePlaylistId: '',
+  targetProvider: 'soundcloud',
+  targetPlaylistId: '',
+  createTargetIfMissing: true
+}
 
 function SyncConfigPage() {
   const [direction, setDirection] = useState('OneWay')
@@ -121,7 +127,7 @@ function SyncConfigPage() {
           >
             <option value="">Select source playlist</option>
             {(playlistOptions[mapping.sourceProvider] ?? []).map((playlist) => (
-              <option key={`${mapping.sourceProvider}-${playlist.id}`} value={playlist.name}>{playlist.name}</option>
+              <option key={`${mapping.sourceProvider}-${playlist.id}`} value={playlist.id}>{playlist.name}</option>
             ))}
           </select>
           <select value={mapping.targetProvider} onChange={(event) => updateMapping(index, 'targetProvider', event.target.value)}>
@@ -134,9 +140,17 @@ function SyncConfigPage() {
           >
             <option value="">Select target playlist</option>
             {(playlistOptions[mapping.targetProvider] ?? []).map((playlist) => (
-              <option key={`${mapping.targetProvider}-${playlist.id}`} value={playlist.name}>{playlist.name}</option>
+              <option key={`${mapping.targetProvider}-${playlist.id}`} value={playlist.id}>{playlist.name}</option>
             ))}
           </select>
+          <label>
+            <input
+              type="checkbox"
+              checked={mapping.createTargetIfMissing !== false}
+              onChange={(event) => updateMapping(index, 'createTargetIfMissing', event.target.checked)}
+            />
+            Create destination playlist if missing
+          </label>
         </div>
       ))}
 
