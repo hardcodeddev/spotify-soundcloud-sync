@@ -6,6 +6,20 @@ const webOrigin = process.env.WEB_ORIGIN || 'http://localhost:5173'
 
 const users = new Map()
 
+const providerPlaylists = {
+  spotify: [
+    { id: 'sp-liked', name: 'Liked Songs' },
+    { id: 'sp-discover-weekly', name: 'Discover Weekly' },
+    { id: 'sp-release-radar', name: 'Release Radar' }
+  ],
+  soundcloud: [
+    { id: 'sc-likes', name: 'My Likes' },
+    { id: 'sc-daily-drops', name: 'Daily Drops' },
+    { id: 'sc-archive', name: 'Archive' }
+  ]
+}
+
+
 function parseCookies(cookieHeader = '') {
   return Object.fromEntries(cookieHeader.split(';').map(v => v.trim()).filter(Boolean).map(part => {
     const i = part.indexOf('=')
@@ -111,7 +125,23 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, '<html><body><h3>SoundCloud connected.</h3><script>window.close()</script></body></html>', { 'Content-Type': 'text/html', 'Set-Cookie': cookieHeader(userId) })
   }
 
+
+  if (url.pathname === '/sync/playlists' && req.method === 'GET') {
+    const provider = (url.searchParams.get('provider') || '').toLowerCase()
+    if (!providerPlaylists[provider]) {
+      return send(res, 400, { error: 'Unsupported provider.' })
+    }
+
+    const playlists = providerPlaylists[provider].map(p => ({
+      id: p.id,
+      name: p.name
+    }))
+
+    return send(res, 200, playlists)
+  }
+
   if (url.pathname === '/sync/profile' && req.method === 'GET') {
+
     const { userId, user } = getOrCreateUser(req)
     return send(res, 200, user.profile, { 'Set-Cookie': cookieHeader(userId) })
   }

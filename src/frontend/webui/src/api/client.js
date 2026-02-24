@@ -61,3 +61,7 @@ export function getRuns() {
 export function getProviderStartUrl(provider) {
   return `${API_BASE_URL}/auth/${provider}/start`
 }
+
+export function getPlaylists(provider) {
+  return request(`/sync/playlists?provider=${encodeURIComponent(provider)}`)
+}
