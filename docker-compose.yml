@@ -6,13 +6,8 @@ services:
     volumes:
       - ./src/backend:/app
     command: bash -lc "dotnet restore PlaylistSync.sln && dotnet run --project PlaylistSync.Api/PlaylistSync.Api.csproj --urls http://0.0.0.0:5000"
-    environment:
-      - ConnectionStrings__PlaylistSyncDb=Host=db;Port=5432;Database=playlistsync;Username=postgres;Password=postgres
     ports:
       - "5000:5000"
-    depends_on:
-      db:
-        condition: service_healthy
 
   webui:
     image: node:22-alpine
@@ -26,23 +21,3 @@ services:
       - "5173:5173"
     depends_on:
       - api
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: playlistsync
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d playlistsync"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 5s
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
-volumes:
-  postgres-data:

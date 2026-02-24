@@ -15,7 +15,7 @@ public static class ServiceCollectionExtensions
         services.Configure<OAuthOptions>(configuration.GetSection(OAuthOptions.SectionName));
 
         services.AddDbContext<PlaylistSyncDbContext>(options =>
-            options.UseNpgsql(configuration.GetConnectionString("PlaylistSyncDb")));
+            options.UseInMemoryDatabase("PlaylistSync"));
 
         services.AddHttpClient("SpotifyClient");
         services.AddHttpClient("SoundCloudClient");
